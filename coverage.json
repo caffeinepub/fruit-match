@@ -1,0 +1,40 @@
+{
+  "kind": "coverage_report",
+  "version": "1.0",
+  "generatedAt": "2026-02-27T22:09:41.248Z",
+  "sources": {
+    "buildRequest": true,
+    "implementationPlan": true
+  },
+  "requirements": {
+    "total": 1,
+    "implemented": 1,
+    "items": [
+      {
+        "id": "REQ-1",
+        "summary": "Create and serve a static app-ads.txt file at the path /app-ads.txt (accessible at https://fruitmatch-1cz.caffeine.xyz/app-ads.txt) with the following content: `google.com, pub-7936595519986908, DIRECT, f08c47fec0942fa0`",
+        "status": "implemented",
+        "plannedFiles": [
+          "frontend/public/app-ads.txt"
+        ],
+        "matchedFiles": [
+          "frontend/public/app-ads.txt"
+        ]
+      }
+    ]
+  },
+  "changedFiles": [
+    "build-request.json",
+    "build-template/README.md",
+    "caffeine.lock.json",
+    "feature_evidence.json",
+    "frontend-file-summaries.txt",
+    "frontend-implementation-plan.json",
+    "frontend/public/app-ads.txt",
+    "frontend/src/config.ts",
+    "project_state.json",
+    "scratch/component-selection.json",
+    "spec.md",
+    "spec_vs_diff_report.json"
+  ]
+}

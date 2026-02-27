@@ -1,0 +1,35 @@
+{
+  "schemaVersion": "1.0.0",
+  "projectStateVersion": 3,
+  "summary": "FruitMatch oyunu - Caffeine platformunda yayınlanmış bir web tabanlı oyun. Google AdMob entegrasyonu için app-ads.txt dosyası ekleniyor.",
+  "architectural_notes": [
+    "Oyun URL: https://fruitmatch-1cz.caffeine.xyz - Caffeine platformunda barındırılıyor",
+    "Caffeine preview iframe'de localStorage erişimi kısıtlı olduğundan oyun preview'da başlamıyor; gerçek URL'de sorunsuz çalışıyor"
+  ],
+  "known_issues": [
+    "Caffeine Draft/Live preview iframe'de 'Start Game' sonrası sadece tema görünüyor - localStorage sandbox kısıtlaması nedeniyle"
+  ],
+  "isFixRequest": false,
+  "existing_features": [
+    {
+      "id": "feature-create-and-serve-a-static-app-ads-txt-file-at-the-path-app-ads-txt-accessible-at-https-fruitmatch-1cz-caffeine-xyz-app-ads-txt-with-the-following-content-google-com-pub-7936595519986908-direct-f08c47fec0942fa0",
+      "title": "Create and serve a static app-ads.txt file at the path /app-ads.txt (accessible at https://fruitmatch-1cz.caffeine.xyz/app-ads.txt) with the following content: `google.com, pub-7936595519986908, DIRECT, f08c47fec0942fa0`",
+      "reqIds": [
+        "REQ-1"
+      ],
+      "version": 1
+    }
+  ],
+  "new_feature_requests": [
+    {
+      "id": "AR-1",
+      "summary": "app-ads.txt dosyasını https://fruitmatch-1cz.caffeine.xyz/app-ads.txt adresinde yayınla (pub-7936595519986908, DIRECT, f08c47fec0942fa0)",
+      "reqIds": [],
+      "status": "pending"
+    }
+  ],
+  "gameProjectType": "2d",
+  "projectName": "FruitMatch",
+  "clarification_mode": "instant",
+  "clarification_rounds": 0
+}

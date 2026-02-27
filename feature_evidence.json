@@ -1,0 +1,26 @@
+{
+  "kind": "feature_evidence_report",
+  "features": [
+    {
+      "featureId": "feature-create-and-serve-a-static-app-ads-txt-file-at-the-path-app-ads-txt-accessible-at-https-fruitmatch-1cz-caffeine-xyz-app-ads-txt-with-the-following-content-google-com-pub-7936595519986908-direct-f08c47fec0942fa0",
+      "featureTitle": "Create and serve a static app-ads.txt file at the path /app-ads.txt (accessible at https://fruitmatch-1cz.caffeine.xyz/app-ads.txt) with the following content: `google.com, pub-7936595519986908, DIRECT, f08c47fec0942fa0`",
+      "files": [
+        "frontend/public/app-ads.txt"
+      ],
+      "components": [
+        "core-infrastructure@1.0.2",
+        "shadcn-ui@1.0.0",
+        "build-template-react@1.0.0",
+        "initial-app@1.0.0",
+        "blob-storage@4.0.0",
+        "http-outcalls@3.0.0",
+        "authorization@4.0.0",
+        "github-export-icp-cli@1.0.0"
+      ],
+      "testIds": [
+        "REQ-1"
+      ],
+      "confidence": "high"
+    }
+  ]
+}

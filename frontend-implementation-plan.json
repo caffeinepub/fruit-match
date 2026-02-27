@@ -1,0 +1,23 @@
+{
+  "kind": "implementation_plan",
+  "version": "1.0",
+  "title": "Add app-ads.txt file for Google AdMob verification",
+  "requirements": [
+    {
+      "id": "REQ-1",
+      "summary": "Create and serve a static app-ads.txt file at /app-ads.txt with Google AdMob publisher verification content",
+      "acceptanceCriteria": [
+        "Navigating to https://fruitmatch-1cz.caffeine.xyz/app-ads.txt returns the file with the exact content: `google.com, pub-7936595519986908, DIRECT, f08c47fec0942fa0`",
+        "The file is served as plain text (text/plain content type)",
+        "The file is placed in the frontend/public directory so it is served as a static asset at the root path /app-ads.txt"
+      ],
+      "file_operations": [
+        {
+          "path": "frontend/public/app-ads.txt",
+          "operation": "create",
+          "description": "Create app-ads.txt file in the public directory containing the exact content: google.com, pub-7936595519986908, DIRECT, f08c47fec0942fa0. This file will be served as a static asset at the root path /app-ads.txt for Google AdMob verification."
+        }
+      ]
+    }
+  ]
+}
