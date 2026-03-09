@@ -7,6 +7,8 @@ export interface Tile {
   frozen?: boolean;
   hidden?: boolean;
   chained?: boolean; // Boss level mechanic: chained fruits
+  chainGroup?: number; // Which chain group this tile belongs to (pairs must be matched in order)
+  special?: "bomb" | "rainbow" | "freeze"; // Special tile types
 }
 
 export interface PowerUp {
@@ -26,6 +28,7 @@ export interface Level {
   powerUps: PowerUp[];
   isBoss?: boolean;
   bossObjective?: BossObjective;
+  moveLimit?: number; // If set, this is a move-based level
 }
 
 const FRUIT_TYPES = [
@@ -153,6 +156,12 @@ function calculateAdvancedDifficultyParams(worldId: number, levelId: number) {
   const moveEfficiencyRequired =
     0.7 + (0.2 * (worldMultiplier - 1.0)) / 1.65 + normalizedLevel * 0.1;
 
+  // Determine if this is a move-based level
+  // Every 5 levels alternate: 1-5 time, 6-10 moves, 11-15 time, 16-20 moves, 21-25 time, 26-30 moves
+  const isMoveBased = !isBoss && Math.floor((levelId - 1) / 5) % 2 === 1;
+  // Move limit: approximately 3x the pair count for fair challenge
+  const moveLimit = isMoveBased ? Math.max(pairCount * 3, 20) : undefined;
+
   return {
     pairCount,
     timeLimit,
@@ -163,6 +172,8 @@ function calculateAdvancedDifficultyParams(worldId: number, levelId: number) {
     normalizedLevel,
     worldMultiplier,
     isBoss,
+    moveLimit,
+    isMoveBased,
   };
 }
 
@@ -191,6 +202,40 @@ function generateBossObjective(worldId: number): BossObjective {
 }
 
 /**
+ * Apply special tile types to a level (bomb, rainbow, freeze)
+ * For boss levels and levels > 15: ~10% chance of special tiles
+ */
+function applySpecialTiles(
+  tiles: Tile[],
+  levelId: number,
+  isBoss: boolean,
+): void {
+  if (!isBoss && levelId <= 15) return;
+
+  const SPECIAL_TYPES: Array<Tile["special"]> = ["bomb", "rainbow", "freeze"];
+  const specialChance = 0.1; // 10% of pairs get special treatment
+
+  // Work on pairs (tiles come in pairs, grouped by fruitType)
+  // We'll assign specials to random pairs
+  const pairMap = new Map<string, number[]>();
+  for (let i = 0; i < tiles.length; i++) {
+    const ft = tiles[i].fruitType;
+    if (!pairMap.has(ft)) pairMap.set(ft, []);
+    pairMap.get(ft)!.push(i);
+  }
+
+  for (const indices of pairMap.values()) {
+    if (indices.length >= 2 && Math.random() < specialChance) {
+      const specialType =
+        SPECIAL_TYPES[Math.floor(Math.random() * SPECIAL_TYPES.length)];
+      // Apply to first 2 tiles in the pair
+      tiles[indices[0]].special = specialType;
+      tiles[indices[1]].special = specialType;
+    }
+  }
+}
+
+/**
  * Apply world-specific mechanics with advanced progressive difficulty scaling
  * Each world has unique obstacle patterns that scale with level progression
  * Extended to support 12 worlds with unique mechanics
@@ -209,13 +254,22 @@ function applyWorldMechanics(
   // Adjust obstacle density based on world difficulty
   const adjustedDensity = obstacleDensity * worldMultiplier;
 
-  // Boss levels get special chained fruit mechanic
+  // Boss levels get special chained fruit mechanic with ordered chain groups
   if (isBoss) {
     const chainCount = Math.floor(tileCount * 0.2);
-    for (let i = 0; i < chainCount; i++) {
+    // Assign chain groups in pairs (each group has exactly 2 tiles that must be matched together)
+    // Group 0 is unlocked initially, groups 1+ are locked until group 0 is matched, etc.
+    let groupIndex = 0;
+    for (let i = 0; i < chainCount; i += 2) {
       if (i < tileCount) {
         tiles[i].chained = true;
+        tiles[i].chainGroup = groupIndex;
       }
+      if (i + 1 < tileCount) {
+        tiles[i + 1].chained = true;
+        tiles[i + 1].chainGroup = groupIndex;
+      }
+      groupIndex++;
     }
   }
 
@@ -549,6 +603,7 @@ export function generateLevel(worldIdIn: number, levelIdIn: number): Level {
     tileVariety,
     normalizedLevel,
     isBoss,
+    moveLimit,
   } = calculateAdvancedDifficultyParams(worldId, levelId);
 
   const tiles: Tile[] = [];
@@ -592,6 +647,9 @@ export function generateLevel(worldIdIn: number, levelIdIn: number): Level {
     isBoss,
   );
 
+  // Apply special tiles for boss levels and levels > 15
+  applySpecialTiles(tiles, levelId, isBoss);
+
   // Power-up availability scales with difficulty to maintain balance
   // All power-ups available from start, but counts decrease in harder levels/worlds
   const worldMultiplier = getWorldDifficultyMultiplier(worldId);
@@ -617,7 +675,7 @@ export function generateLevel(worldIdIn: number, levelIdIn: number): Level {
   ];
 
   console.log(
-    `[GameLogic] Generated level - World ${worldId}, Level ${levelId}${isBoss ? " (BOSS)" : ""}: ${tiles.length} tiles, ${timeLimit}s time limit`,
+    `[GameLogic] Generated level - World ${worldId}, Level ${levelId}${isBoss ? " (BOSS)" : moveLimit ? " (MOVE-BASED)" : ""}: ${tiles.length} tiles, ${timeLimit}s time limit${moveLimit ? `, ${moveLimit} moves` : ""}`,
   );
 
   const level: Level = {
@@ -625,6 +683,7 @@ export function generateLevel(worldIdIn: number, levelIdIn: number): Level {
     timeLimit,
     powerUps,
     isBoss,
+    moveLimit,
   };
 
   // Add boss objective for boss levels

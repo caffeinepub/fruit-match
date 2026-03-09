@@ -8,7 +8,12 @@ import {
   AlertCircle,
   ArrowLeft,
   Clock,
+  Heart,
+  Info,
   MapPin,
+  Pause,
+  Play,
+  Share2,
   Skull,
   Star,
   Trophy,
@@ -19,6 +24,11 @@ import {
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { SoundContext, type Theme } from "../backend";
+import {
+  AchievementManager,
+  checkAndUnlockAchievements,
+} from "../components/AchievementSystem";
+import { updateQuestProgress } from "../components/DailyQuests";
 import * as LocalStorage from "../lib/localStorageManager";
 import { getSoundManager } from "../lib/soundManager";
 
@@ -170,10 +180,6 @@ export default function GamePlay({
 }: GamePlayProps) {
   const { t } = useLanguage();
 
-  // CRITICAL: Force state initialization to ensure rendering
-  const [_gameStarted, setGameStarted] = useState(true); // Always true
-  const [_isPlaying, setIsPlaying] = useState(true); // Always true
-
   // Initialize with fallback to guarantee valid state
   const [levelData, setLevelData] = useState<Level>(() =>
     createFallbackLevel(worldId, levelId),
@@ -201,10 +207,33 @@ export default function GamePlay({
   const [matchEffects, setMatchEffects] = useState<
     Array<{ id: string; x: number; y: number }>
   >([]);
+  const [hintTileIds, setHintTileIds] = useState<number[]>([]);
+  const [currentChainGroup, setCurrentChainGroup] = useState(0);
+
+  // --- NEW STATE ---
+  const [isPaused, setIsPaused] = useState(false);
+  const [isGameOver, setIsGameOver] = useState(false);
+  const [gameOverReason, setGameOverReason] = useState<"time" | "moves">(
+    "time",
+  );
+  const [lives, setLives] = useState(() => {
+    LocalStorage.regenerateLives();
+    return LocalStorage.getLives();
+  });
+  const [comboCount, setComboCount] = useState(0);
+  const [showCombo, setShowCombo] = useState(false);
+  const [movesUsed, setMovesUsed] = useState(0);
+  const [showObjectiveOverlay, setShowObjectiveOverlay] = useState(true);
+  const [showStarInfo, setShowStarInfo] = useState(false);
+  const [usedPowerUpThisLevel, setUsedPowerUpThisLevel] = useState(false);
+  // -----------------
+
   const timerRef = useRef<number | null>(null);
   const autoCloseTimerRef = useRef<number | null>(null);
   const bossAudioPlayedRef = useRef(false);
   const handleLevelCompleteRef = useRef<() => void>(() => {});
+  const comboTimeoutRef = useRef<number | null>(null);
+  const [pendingAchievements, setPendingAchievements] = useState<string[]>([]);
 
   const themeColors =
     WORLD_THEME_COLORS[worldId as keyof typeof WORLD_THEME_COLORS] ||
@@ -217,6 +246,9 @@ export default function GamePlay({
   );
 
   const isBossLevel = levelData.isBoss || levelId === 30;
+  const isMoveBased = !!levelData.moveLimit;
+  const moveLimit = levelData.moveLimit ?? 0;
+  const movesLeft = Math.max(moveLimit - movesUsed, 0);
 
   useEffect(() => {
     const initAudio = async () => {
@@ -241,9 +273,18 @@ export default function GamePlay({
     }
   }, [isBossLevel, soundManager]);
 
+  // Auto-hide objective overlay after 2 seconds
+  useEffect(() => {
+    if (showObjectiveOverlay) {
+      const timer = window.setTimeout(() => {
+        setShowObjectiveOverlay(false);
+      }, 2200);
+      return () => clearTimeout(timer);
+    }
+  }, [showObjectiveOverlay]);
+
   const toggleSound = async () => {
     await soundManager.resumeContext();
-
     const newState = !isSoundEnabled;
     setIsSoundEnabled(newState);
     soundManager.setSoundEnabled(newState);
@@ -255,9 +296,7 @@ export default function GamePlay({
       `[GamePlay] Initializing level - World ${worldId}, Level ${levelId}${levelId === 30 ? " (BOSS)" : ""}`,
     );
 
-    // Validate world and level parameters
     if (worldId < 1 || worldId > 12) {
-      console.error(`[GamePlay] ✗ Invalid worldId: ${worldId}, using fallback`);
       setLoadError("Geçersiz dünya numarası");
       const fallback = createFallbackLevel(1, 1);
       setLevelData(fallback);
@@ -268,7 +307,6 @@ export default function GamePlay({
     }
 
     if (levelId < 1 || levelId > 30) {
-      console.error(`[GamePlay] ✗ Invalid levelId: ${levelId}, using fallback`);
       setLoadError("Geçersiz seviye numarası");
       const fallback = createFallbackLevel(worldId, 1);
       setLevelData(fallback);
@@ -279,17 +317,14 @@ export default function GamePlay({
     }
 
     try {
-      // Generate level data
       const level = generateLevel(worldId, levelId);
 
-      // Validate level data structure with fallback
       if (
         !level ||
         !level.tiles ||
         !Array.isArray(level.tiles) ||
         level.tiles.length === 0
       ) {
-        console.error("[GamePlay] ✗ Invalid level data, using fallback");
         setLoadError("Seviye verileri yüklenemedi");
         const fallback = createFallbackLevel(worldId, levelId);
         setLevelData(fallback);
@@ -300,33 +335,23 @@ export default function GamePlay({
       }
 
       if (typeof level.timeLimit !== "number" || level.timeLimit <= 0) {
-        console.error("[GamePlay] ✗ Invalid timeLimit, using default");
         level.timeLimit = 120;
       }
 
-      console.log(
-        `[GamePlay] ✓ Level generated successfully with ${level.tiles.length} tiles, ${level.timeLimit}s time limit${level.isBoss ? " (BOSS LEVEL)" : ""}`,
-      );
-
-      // Set level data - ALWAYS ensure valid state
       setLevelData(level);
       setTiles(level.tiles);
       setTimeLeft(level.timeLimit);
       setInitialTimeLimit(level.timeLimit);
       setLoadError(null);
+      setMovesUsed(0);
+      setComboCount(0);
+      setShowObjectiveOverlay(true);
 
-      // Force game state to playing
-      setGameStarted(true);
-      setIsPlaying(true);
-
-      // Load power-up counts from localStorage
       const counts = LocalStorage.getPowerUpCounts();
       setPowerUpCounts(counts);
-      console.log("[GamePlay] ✓ Power-up counts loaded:", counts);
     } catch (error) {
       console.error("[GamePlay] ✗ Error generating level:", error);
       setLoadError("Oyun yüklenirken hata oluştu");
-      // Use fallback even on error
       const fallback = createFallbackLevel(worldId, levelId);
       setLevelData(fallback);
       setTiles(fallback.tiles);
@@ -335,13 +360,15 @@ export default function GamePlay({
     }
   }, [worldId, levelId]);
 
+  // Timer — respects isPaused and isMoveBased
   useEffect(() => {
-    if (isCompleted) return;
+    if (isCompleted || isGameOver || isMoveBased) return;
 
     timerRef.current = window.setInterval(() => {
+      if (isPaused) return;
       setTimeLeft((prev) => {
         if (prev <= 1) {
-          handleGameOver();
+          handleGameOverInternal("time");
           return 0;
         }
         return prev - 1;
@@ -351,7 +378,7 @@ export default function GamePlay({
     return () => {
       if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [isCompleted]);
+  }, [isCompleted, isGameOver, isMoveBased, isPaused]);
 
   useEffect(() => {
     if (isCompleted) {
@@ -365,18 +392,93 @@ export default function GamePlay({
     };
   }, [isCompleted, onBack]);
 
-  const handleGameOver = async () => {
+  // Internal game-over handler (shows modal, consumes life)
+  const handleGameOverInternal = (reason: "time" | "moves") => {
     if (timerRef.current) clearInterval(timerRef.current);
+    setGameOverReason(reason);
+
+    const consumed = LocalStorage.consumeLife();
+    if (consumed) {
+      setLives((prev) => Math.max(prev - 1, 0));
+    }
 
     if (isBossLevel) {
-      await soundManager.playSound(SoundContext.bossDefeat);
+      soundManager.playSound(SoundContext.bossDefeat);
       triggerLightFlash("rgba(0,0,0,0.7)", 600);
       triggerScreenShake(900);
     }
 
-    toast.error(t("time_up"));
-    setTimeout(() => onBack(), 2000);
+    setIsGameOver(true);
   };
+
+  // handleGameOver is used by the timer callback via setInterval closure
+
+  // Trigger combo display
+  const triggerComboDisplay = (count: number) => {
+    if (count >= 2) {
+      setShowCombo(true);
+      if (comboTimeoutRef.current) clearTimeout(comboTimeoutRef.current);
+      comboTimeoutRef.current = window.setTimeout(() => {
+        setShowCombo(false);
+      }, 1500);
+    }
+  };
+
+  // Check and unlock achievements
+  const checkAchievements = useCallback(
+    (params: {
+      isFirstLevel?: boolean;
+      isFirstBoss?: boolean;
+      timeTaken: number;
+      usedPowerUp: boolean;
+      maxCombo: number;
+    }) => {
+      const toasts: string[] = [];
+
+      if (params.isFirstLevel) {
+        if (LocalStorage.unlockAchievement("first_level")) {
+          toasts.push(
+            `${t("achievement_unlocked")} ${t("achievement_first_level")}`,
+          );
+        }
+      }
+      if (params.isFirstBoss && isBossLevel) {
+        if (LocalStorage.unlockAchievement("first_boss")) {
+          toasts.push(
+            `${t("achievement_unlocked")} ${t("achievement_first_boss")}`,
+          );
+        }
+      }
+      if (params.timeTaken < 30) {
+        if (LocalStorage.unlockAchievement("speed_demon")) {
+          toasts.push(
+            `${t("achievement_unlocked")} ${t("achievement_speed_demon")}`,
+          );
+        }
+      }
+      if (!params.usedPowerUp) {
+        if (LocalStorage.unlockAchievement("no_power")) {
+          toasts.push(
+            `${t("achievement_unlocked")} ${t("achievement_no_power")}`,
+          );
+        }
+      }
+      if (params.maxCombo >= 5) {
+        if (LocalStorage.unlockAchievement("combo_master")) {
+          toasts.push(
+            `${t("achievement_unlocked")} ${t("achievement_combo_master")}`,
+          );
+        }
+      }
+
+      for (let i = 0; i < toasts.length; i++) {
+        setTimeout(() => {
+          toast.success(toasts[i], { duration: 4000 });
+        }, i * 800);
+      }
+    },
+    [t, isBossLevel],
+  );
 
   const createMatchEffect = (tileId: number) => {
     const effectId = `effect-${Date.now()}-${Math.random()}`;
@@ -397,11 +499,19 @@ export default function GamePlay({
     }
   };
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: handleLevelCompleteRef is a stable ref, createMatchEffect is stable
+  // biome-ignore lint/correctness/useExhaustiveDependencies: handleLevelCompleteRef is a stable ref
   const handleTileClick = useCallback(
     async (tileId: number) => {
+      if (isPaused || isGameOver || isCompleted) return;
+
       const tile = tiles.find((t) => t.id === tileId);
       if (!tile || tile.matched || tile.covered) return;
+
+      // Block locked chain tiles
+      if (tile.chained && (tile.chainGroup ?? 0) > currentChainGroup) {
+        toast.error(t("chain_locked"));
+        return;
+      }
 
       await soundManager.playSound(SoundContext.tileClick);
 
@@ -411,14 +521,36 @@ export default function GamePlay({
         setSelectedTile(null);
       } else {
         const firstTile = tiles.find((t) => t.id === selectedTile);
-        if (firstTile && firstTile.fruitType === tile.fruitType) {
+        if (!firstTile) {
+          setSelectedTile(tileId);
+          return;
+        }
+
+        // Rainbow tiles match with anything; otherwise fruitType must match
+        const isMatch =
+          firstTile.fruitType === tile.fruitType ||
+          firstTile.special === "rainbow" ||
+          tile.special === "rainbow";
+
+        if (isMatch) {
           await soundManager.playSound(SoundContext.tileMatch);
           createMatchEffect(selectedTile);
           createMatchEffect(tileId);
-          // Boss level: small flash on each match
+
           if (isBossLevel) {
             triggerLightFlash("rgba(220,38,38,0.2)", 200);
           }
+
+          // Check if this match completes a chain group
+          const bothChained =
+            firstTile.chained &&
+            tile.chained &&
+            firstTile.chainGroup !== undefined &&
+            firstTile.chainGroup === tile.chainGroup &&
+            firstTile.chainGroup === currentChainGroup;
+
+          // Collect specials from both tiles
+          const specials = [firstTile.special, tile.special].filter(Boolean);
 
           setTiles((prev) =>
             prev.map((t) => {
@@ -436,9 +568,75 @@ export default function GamePlay({
             }),
           );
 
+          if (bothChained) {
+            setCurrentChainGroup((prev) => prev + 1);
+          }
+
           await soundManager.playSound(SoundContext.tileClear);
-          setMatchCount((prev) => prev + 1);
+
+          const newMatchCount = matchCount + 1;
+          setMatchCount(newMatchCount);
+          updateQuestProgress("match");
           setSelectedTile(null);
+
+          // Move counter
+          const newMovesUsed = movesUsed + 1;
+          setMovesUsed(newMovesUsed);
+
+          // Combo logic — successful match increments combo
+          const newCombo = comboCount + 1;
+          setComboCount(newCombo);
+          updateQuestProgress("combo");
+          triggerComboDisplay(newCombo);
+
+          // Handle special tile effects
+          for (const special of specials) {
+            if (special === "bomb") {
+              // Clear 2 additional random pairs
+              setTiles((prev) => {
+                const unmatched = prev.filter(
+                  (t) => !t.matched && t.id !== selectedTile && t.id !== tileId,
+                );
+                const pairsCleared: string[] = [];
+                const toMatch: number[] = [];
+                for (const t of unmatched) {
+                  if (!pairsCleared.includes(t.fruitType)) {
+                    const partner = unmatched.find(
+                      (p) =>
+                        p.fruitType === t.fruitType &&
+                        p.id !== t.id &&
+                        !toMatch.includes(p.id),
+                    );
+                    if (partner) {
+                      toMatch.push(t.id, partner.id);
+                      pairsCleared.push(t.fruitType);
+                      if (pairsCleared.length >= 2) break;
+                    }
+                  }
+                }
+                return prev.map((t) =>
+                  toMatch.includes(t.id) ? { ...t, matched: true } : t,
+                );
+              });
+              toast.success(t("special_bomb"));
+            } else if (special === "freeze") {
+              setTimeLeft((prev) => prev + 5);
+              toast.success(t("special_freeze"));
+            } else if (special === "rainbow") {
+              toast.success(t("special_rainbow"));
+            }
+          }
+
+          // Check for move-based game over
+          if (isMoveBased && moveLimit > 0 && newMovesUsed >= moveLimit) {
+            const remainingUnmatched = tiles.filter(
+              (t) => !t.matched && t.id !== selectedTile && t.id !== tileId,
+            );
+            if (remainingUnmatched.length > 0) {
+              handleGameOverInternal("moves");
+              return;
+            }
+          }
 
           const remainingTiles = tiles.filter(
             (t) => !t.matched && t.id !== selectedTile && t.id !== tileId,
@@ -447,11 +645,28 @@ export default function GamePlay({
             handleLevelCompleteRef.current();
           }
         } else {
+          // Wrong selection — reset combo
+          setComboCount(0);
           setSelectedTile(tileId);
         }
       }
     },
-    [tiles, selectedTile, soundManager, isBossLevel],
+    [
+      tiles,
+      selectedTile,
+      soundManager,
+      isBossLevel,
+      currentChainGroup,
+      t,
+      isPaused,
+      isGameOver,
+      isCompleted,
+      matchCount,
+      movesUsed,
+      comboCount,
+      isMoveBased,
+      moveLimit,
+    ],
   );
 
   const handleLevelComplete = async () => {
@@ -497,13 +712,40 @@ export default function GamePlay({
     setEarnedStars(stars);
     setStarBreakdown(breakdown);
 
-    // Update level progress in localStorage
     LocalStorage.updateLevelProgress(worldId, levelId, stars);
-    console.log(
-      `[GamePlay] ✓ Level progress saved to localStorage - World ${worldId}, Level ${levelId}, Stars: ${stars}`,
-    );
 
     setIsCompleted(true);
+    // Track daily quest progress
+    updateQuestProgress("level_complete");
+    if (isBossLevel) updateQuestProgress("beat_boss");
+    updateQuestProgress("stars", stars);
+    // Check new achievements via AchievementSystem
+    const data = LocalStorage.loadPlayerData();
+    const totalCompleted = data
+      ? data.worlds.reduce(
+          (s, w) => s + w.levels.filter((l) => l.completed).length,
+          0,
+        )
+      : 0;
+    const totalStarsAll = data ? data.totalStars : 0;
+    const newly = checkAndUnlockAchievements({
+      totalLevelsCompleted: totalCompleted,
+      totalStars: totalStarsAll,
+      maxCombo: comboCount,
+      usedPowerUp: usedPowerUpThisLevel,
+      completedBoss: isBossLevel,
+    });
+    if (newly.length > 0) setPendingAchievements((prev) => [...prev, ...newly]);
+
+    // Check achievements
+    const existingAchievements = LocalStorage.getAchievements();
+    checkAchievements({
+      isFirstLevel: !existingAchievements.includes("first_level"),
+      isFirstBoss: isBossLevel && !existingAchievements.includes("first_boss"),
+      timeTaken,
+      usedPowerUp: usedPowerUpThisLevel,
+      maxCombo: comboCount,
+    });
   };
 
   // Keep ref in sync so useCallback can call it without dependency
@@ -512,24 +754,24 @@ export default function GamePlay({
   const activatePowerUp = async (type: string) => {
     const powerUpType = type as keyof LocalStorage.PowerUpCounts;
 
-    // Check if power-up is available
     if (powerUpCounts[powerUpType] <= 0) {
       toast.error("Bu güç artırıcı kullanılamıyor!");
       return;
     }
 
-    // Consume power-up from localStorage
     const success = LocalStorage.consumePowerUp(powerUpType);
     if (!success) {
       toast.error("Güç artırıcı kullanılamadı!");
       return;
     }
 
-    // Update local state
     setPowerUpCounts((prev) => ({
       ...prev,
       [powerUpType]: prev[powerUpType] - 1,
     }));
+    setUsedPowerUpThisLevel(true);
+    updateQuestProgress("use_bomb");
+    updateQuestProgress("world_play");
 
     switch (type) {
       case "bomb": {
@@ -554,22 +796,42 @@ export default function GamePlay({
       }
       case "magnifier": {
         await soundManager.playSound(SoundContext.magnifier);
-        const coveredTile = tiles.find((t) => t.covered && !t.matched);
-        if (coveredTile) {
+        const visibleTiles = tiles.filter(
+          (t) => !t.matched && !t.covered && !t.hidden,
+        );
+        const fruitCounts = new Map<string, number[]>();
+        for (const tile of visibleTiles) {
+          if (!fruitCounts.has(tile.fruitType))
+            fruitCounts.set(tile.fruitType, []);
+          fruitCounts.get(tile.fruitType)!.push(tile.id);
+        }
+        let foundPair: number[] = [];
+        for (const ids of fruitCounts.values()) {
+          if (ids.length >= 2) {
+            foundPair = ids.slice(0, 2);
+            break;
+          }
+        }
+        if (foundPair.length >= 2) {
+          setHintTileIds(foundPair);
+          toast.info(t("hint_showing"));
+          setTimeout(() => setHintTileIds([]), 3000);
+        } else {
           toast.info(t("hint_showing"));
         }
         break;
       }
-      case "shuffle":
+      case "shuffle": {
         await soundManager.playSound(SoundContext.shuffle);
         setTiles((prev) => {
-          const matched = prev.filter((t) => t.matched);
-          const unmatched = prev.filter((t) => !t.matched);
+          const matched = prev.filter((tile) => tile.matched);
+          const unmatched = prev.filter((tile) => !tile.matched);
           const shuffled = [...unmatched].sort(() => Math.random() - 0.5);
           return [...matched, ...shuffled];
         });
         toast.success(t("tiles_shuffled"));
         break;
+      }
     }
   };
 
@@ -581,7 +843,6 @@ export default function GamePlay({
     if (isCompleted) return earnedStars;
     const timeTaken = (Date.now() - gameStartTime) / 1000;
     const timePercentage = timeTaken / initialTimeLimit;
-
     if (timePercentage < 0.4) return 3;
     if (timePercentage < 0.7) return 2;
     return 1;
@@ -597,7 +858,6 @@ export default function GamePlay({
   };
 
   const handleRetry = () => {
-    // Reload the level by resetting state
     try {
       const level = generateLevel(worldId, levelId);
       if (level?.tiles && level.tiles.length > 0) {
@@ -625,24 +885,43 @@ export default function GamePlay({
     setSelectedTile(null);
     setMatchCount(0);
     setIsCompleted(false);
+    setIsGameOver(false);
     setEarnedStars(0);
     setStarBreakdown([]);
-    setGameStarted(true);
-    setIsPlaying(true);
+    setCurrentChainGroup(0);
+    setHintTileIds([]);
+    setMovesUsed(0);
+    setComboCount(0);
+    setShowObjectiveOverlay(true);
+    setUsedPowerUpThisLevel(false);
     bossAudioPlayedRef.current = false;
 
     const counts = LocalStorage.getPowerUpCounts();
     setPowerUpCounts(counts);
+    // Refresh lives
+    LocalStorage.regenerateLives();
+    setLives(LocalStorage.getLives());
+  };
+
+  // --- Objective text helper ---
+  const getObjectiveText = () => {
+    if (isBossLevel) return t("objective_boss");
+    if (isMoveBased)
+      return t("objective_moves").replace("{n}", String(moveLimit));
+    return t("objective_time").replace("{n}", String(initialTimeLimit));
   };
 
   // CRITICAL: Always render the full gameplay layout
-  // No conditional returns that prevent GameBoard rendering
   return (
     <div
       id="gameplay-root"
       className="gameplay-fullscreen"
       style={{ opacity: 1, zIndex: 1 }}
     >
+      <AchievementManager
+        pendingIds={pendingAchievements}
+        onClear={() => setPendingAchievements([])}
+      />
       <div
         className="gameplay-background"
         style={{
@@ -703,67 +982,136 @@ export default function GamePlay({
       </button>
 
       <div className="gameplay-content" style={{ opacity: 1, zIndex: 10 }}>
+        {/* === TOP HUD === */}
         <div className="gameplay-top-hud" style={{ opacity: 1, zIndex: 20 }}>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={async () => {
-              await soundManager.playSound(SoundContext.buttonClick);
-              onBack();
-            }}
-            className="bg-white/95 hover:bg-white backdrop-blur-md shadow-lg border-2 border-white/50 transition-all hover:scale-105 text-sm px-3 py-2"
-          >
-            <ArrowLeft className="mr-1 h-4 w-4" />
-            {t("back")}
-          </Button>
-
+          {/* Left: Back + Pause buttons */}
           <div className="flex items-center gap-2">
+            <Button
+              data-ocid="gameplay.back.button"
+              variant="ghost"
+              size="sm"
+              onClick={async () => {
+                await soundManager.playSound(SoundContext.buttonClick);
+                onBack();
+              }}
+              className="bg-white/95 hover:bg-white backdrop-blur-md shadow-lg border-2 border-white/50 transition-all hover:scale-105 text-sm px-3 py-2"
+            >
+              <ArrowLeft className="mr-1 h-4 w-4" />
+              {t("back")}
+            </Button>
+
+            <Button
+              data-ocid="gameplay.pause.toggle"
+              variant="ghost"
+              size="sm"
+              onClick={() => setIsPaused((p) => !p)}
+              className="bg-white/95 hover:bg-white backdrop-blur-md shadow-lg border-2 border-white/50 transition-all hover:scale-105 px-3 py-2"
+              aria-label={isPaused ? t("resume") : t("pause")}
+            >
+              {isPaused ? (
+                <Play className="h-4 w-4" />
+              ) : (
+                <Pause className="h-4 w-4" />
+              )}
+            </Button>
+          </div>
+
+          {/* Right: timer/moves, stars, lives, world info */}
+          <div className="flex items-center gap-2">
+            {/* Lives */}
+            <Card className="bg-white/95 backdrop-blur-md shadow-xl border-2 border-white/50">
+              <CardContent className="flex items-center gap-1 p-2">
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <Heart
+                    key={i}
+                    className={`h-4 w-4 transition-all ${
+                      i <= lives ? "fill-red-500 text-red-500" : "text-gray-300"
+                    }`}
+                  />
+                ))}
+              </CardContent>
+            </Card>
+
+            {/* Timer or Move counter */}
             <Card
               className="bg-white/95 backdrop-blur-md shadow-xl border-2 transition-all hover:scale-105"
-              style={{ borderColor: themeColors.primary, opacity: 1 }}
+              style={{
+                borderColor:
+                  isMoveBased && movesLeft <= 5
+                    ? "#dc2626"
+                    : !isMoveBased && timeLeft <= 10
+                      ? "#dc2626"
+                      : themeColors.primary,
+              }}
             >
               <CardContent className="flex items-center gap-2 p-2">
-                <Clock
-                  className="h-5 w-5"
-                  style={{ color: themeColors.primary }}
-                />
-                <span
-                  className="text-xl font-bold"
-                  style={{ color: themeColors.primary }}
-                >
-                  {timeLeft}s
-                </span>
+                {isMoveBased ? (
+                  <>
+                    <Zap
+                      className="h-5 w-5"
+                      style={{
+                        color: movesLeft <= 5 ? "#dc2626" : themeColors.primary,
+                      }}
+                    />
+                    <span
+                      className="text-xl font-bold"
+                      style={{
+                        color: movesLeft <= 5 ? "#dc2626" : themeColors.primary,
+                      }}
+                    >
+                      {movesLeft}
+                    </span>
+                    <span className="text-xs text-gray-500">
+                      {t("moves_label")}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <Clock
+                      className="h-5 w-5"
+                      style={{
+                        color: timeLeft <= 10 ? "#dc2626" : themeColors.primary,
+                      }}
+                    />
+                    <span
+                      className={`text-xl font-bold ${
+                        timeLeft <= 10 ? "animate-pulse" : ""
+                      }`}
+                      style={{
+                        color: timeLeft <= 10 ? "#dc2626" : themeColors.primary,
+                      }}
+                    >
+                      {timeLeft}s
+                    </span>
+                  </>
+                )}
               </CardContent>
             </Card>
 
-            <Card
-              className="bg-white/95 backdrop-blur-md shadow-xl border-2 border-white/50"
-              style={{ opacity: 1 }}
-            >
+            {/* Star prediction */}
+            <Card className="bg-white/95 backdrop-blur-md shadow-xl border-2 border-white/50">
               <CardContent className="flex items-center gap-1 p-2">
                 <Zap className="h-4 w-4 text-fruit-star" />
-                <div className="flex items-center gap-0.5">
-                  {[1, 2, 3].map((starNum) => (
-                    <Star
-                      key={starNum}
-                      className={`h-4 w-4 transition-all ${
-                        starNum <= currentStarPrediction
-                          ? "fill-fruit-star text-fruit-star animate-pulse"
-                          : "text-gray-300"
-                      }`}
-                    />
-                  ))}
-                </div>
+                {[1, 2, 3].map((starNum) => (
+                  <Star
+                    key={starNum}
+                    className={`h-4 w-4 transition-all ${
+                      starNum <= currentStarPrediction
+                        ? "fill-fruit-star text-fruit-star animate-pulse"
+                        : "text-gray-300"
+                    }`}
+                  />
+                ))}
               </CardContent>
             </Card>
 
+            {/* World info card */}
             <Card
               className={`bg-gradient-to-br from-white/95 to-white/90 backdrop-blur-md shadow-xl border-2 transition-all hover:scale-105 overflow-hidden ${
                 isBossLevel ? "animate-pulse" : ""
               }`}
               style={{
                 borderColor: isBossLevel ? "#dc2626" : themeColors.primary,
-                opacity: 1,
               }}
             >
               <CardContent className="flex items-center gap-2 p-2 relative">
@@ -840,6 +1188,7 @@ export default function GamePlay({
           </div>
         )}
 
+        {/* === PROGRESS BAR + STAR INFO === */}
         <div
           className="gameplay-progress-bar"
           style={{ opacity: 1, zIndex: 20 }}
@@ -848,9 +1197,21 @@ export default function GamePlay({
             <span className="text-xs font-semibold text-white drop-shadow-lg">
               {t("progress")}
             </span>
-            <span className="text-xs font-semibold text-white drop-shadow-lg">
-              {Math.round(progress)}%
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-semibold text-white drop-shadow-lg">
+                {Math.round(progress)}%
+              </span>
+              {/* Star info toggle */}
+              <button
+                data-ocid="gameplay.star_info.toggle"
+                type="button"
+                onClick={() => setShowStarInfo((s) => !s)}
+                className="text-white/80 hover:text-white transition-colors"
+                aria-label={t("star_info")}
+              >
+                <Info className="w-3 h-3" />
+              </button>
+            </div>
           </div>
           <div className="h-2 bg-white/30 rounded-full overflow-hidden backdrop-blur-sm shadow-inner">
             <div
@@ -863,9 +1224,21 @@ export default function GamePlay({
               }}
             />
           </div>
+          {/* Star conditions tooltip */}
+          {showStarInfo && (
+            <div
+              className="mt-2 rounded-xl px-3 py-2 text-xs text-white/90 bg-black/50 backdrop-blur-md border border-white/20 space-y-1"
+              style={{ zIndex: 30 }}
+            >
+              <div className="font-bold mb-1">{t("star_info")}</div>
+              <div>{t("star_cond_1")}</div>
+              <div>{t("star_cond_2")}</div>
+              <div>{t("star_cond_3")}</div>
+            </div>
+          )}
         </div>
 
-        {/* CRITICAL: GameBoard always renders with guaranteed visibility */}
+        {/* === GAME BOARD === */}
         <div
           className="gameplay-board-container"
           style={{ opacity: 1, zIndex: 15 }}
@@ -884,7 +1257,7 @@ export default function GamePlay({
                   onClick={handleRetry}
                   className="bg-blue-600 hover:bg-blue-700 text-white"
                 >
-                  Tekrar Dene
+                  {t("retry")}
                 </Button>
               </CardContent>
             </Card>
@@ -897,9 +1270,12 @@ export default function GamePlay({
             onTileClick={handleTileClick}
             worldId={worldId}
             themeColor={themeColors.primary}
+            hintTileIds={hintTileIds}
+            currentChainGroup={currentChainGroup}
           />
         </div>
 
+        {/* === POWER-UPS === */}
         <div
           className="gameplay-powerups-bottom"
           style={{ opacity: 1, zIndex: 20 }}
@@ -916,6 +1292,7 @@ export default function GamePlay({
           />
         </div>
 
+        {/* === MATCH EFFECTS === */}
         {matchEffects.map((effect) => (
           <div
             key={effect.id}
@@ -940,6 +1317,190 @@ export default function GamePlay({
           </div>
         ))}
 
+        {/* === COMBO DISPLAY === */}
+        {showCombo && comboCount >= 2 && (
+          <div
+            className="fixed left-1/2 -translate-x-1/2 z-40 combo-pop"
+            style={{ top: "30%" }}
+          >
+            <div
+              className="text-3xl font-black text-white drop-shadow-2xl px-6 py-3 rounded-2xl"
+              style={{
+                background: "linear-gradient(135deg, #f59e0b, #ef4444)",
+                boxShadow: "0 8px 32px rgba(245,158,11,0.6)",
+              }}
+            >
+              🔥 x{comboCount} {t("combo_label")}
+            </div>
+          </div>
+        )}
+
+        {/* === OBJECTIVE INTRO OVERLAY === */}
+        {showObjectiveOverlay && (
+          <div className="fixed inset-0 flex items-center justify-center z-40 pointer-events-none">
+            <div className="objective-intro">
+              <div
+                className="text-center px-8 py-6 rounded-3xl backdrop-blur-xl border-2 border-white/40 shadow-2xl"
+                style={{
+                  background: isBossLevel
+                    ? "rgba(220,38,38,0.9)"
+                    : "rgba(0,0,0,0.75)",
+                }}
+              >
+                <div className="text-4xl mb-2">
+                  {isBossLevel ? "💀" : isMoveBased ? "👆" : "⏱"}
+                </div>
+                <div className="text-xl font-bold text-white">
+                  {t("objective_title")}
+                </div>
+                <div className="text-2xl font-black text-white mt-1">
+                  {getObjectiveText()}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* === PAUSE OVERLAY === */}
+        {isPaused && (
+          <div
+            data-ocid="gameplay.pause.modal"
+            className="fixed inset-0 flex items-center justify-center z-50 bg-black/60 pause-overlay"
+          >
+            <Card
+              className="bg-white/95 shadow-2xl border-4 max-w-sm mx-4 w-full"
+              style={{ borderColor: themeColors.primary }}
+            >
+              <CardContent className="p-8 text-center space-y-6">
+                <div className="text-6xl">⏸</div>
+                <h2
+                  className="text-3xl font-black"
+                  style={{ color: themeColors.primary }}
+                >
+                  {t("pause")}
+                </h2>
+
+                {/* Lives display */}
+                <div className="flex justify-center gap-2">
+                  {[1, 2, 3, 4, 5].map((i) => (
+                    <Heart
+                      key={i}
+                      className={`h-6 w-6 ${
+                        i <= lives
+                          ? "fill-red-500 text-red-500"
+                          : "text-gray-300"
+                      }`}
+                    />
+                  ))}
+                </div>
+                {lives === 0 && (
+                  <p className="text-red-500 text-sm font-semibold">
+                    {t("no_lives")}
+                  </p>
+                )}
+
+                <div className="flex flex-col gap-3">
+                  <Button
+                    data-ocid="gameplay.pause.resume_button"
+                    onClick={() => setIsPaused(false)}
+                    className="w-full text-lg py-3 font-bold"
+                    style={{ backgroundColor: themeColors.primary }}
+                  >
+                    <Play className="mr-2 h-5 w-5" />
+                    {t("resume")}
+                  </Button>
+                  <Button
+                    data-ocid="gameplay.pause.back_button"
+                    variant="outline"
+                    onClick={() => {
+                      soundManager.playSound(SoundContext.buttonClick);
+                      onBack();
+                    }}
+                    className="w-full"
+                  >
+                    <ArrowLeft className="mr-2 h-4 w-4" />
+                    {t("back_to_map")}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {/* === GAME OVER MODAL === */}
+        {isGameOver && (
+          <div
+            data-ocid="gameplay.gameover.modal"
+            className="fixed inset-0 flex items-center justify-center z-50 bg-black/75 backdrop-blur-md"
+          >
+            <Card className="bg-white shadow-2xl border-4 border-red-500 max-w-sm mx-4 w-full animate-in zoom-in-95 duration-400">
+              <CardContent className="p-8 text-center space-y-5">
+                <div className="text-7xl animate-bounce">💀</div>
+                <h2 className="text-4xl font-black text-red-600">
+                  {t("game_over")}
+                </h2>
+                <p className="text-lg text-gray-600 font-semibold">
+                  {gameOverReason === "moves"
+                    ? t("moves_up")
+                    : t("time_up_desc")}
+                </p>
+
+                {/* Lives remaining */}
+                <div className="space-y-2">
+                  <p className="text-sm font-semibold text-gray-500">
+                    {t("lives_left")}
+                  </p>
+                  <div className="flex justify-center gap-2">
+                    {[1, 2, 3, 4, 5].map((i) => (
+                      <Heart
+                        key={i}
+                        className={`h-7 w-7 ${
+                          i <= lives
+                            ? "fill-red-500 text-red-500"
+                            : "text-gray-200"
+                        }`}
+                      />
+                    ))}
+                  </div>
+                  {lives === 0 && (
+                    <p className="text-red-500 text-xs">{t("no_lives")}</p>
+                  )}
+                </div>
+
+                <div className="flex flex-col gap-3">
+                  {lives > 0 ? (
+                    <Button
+                      data-ocid="gameplay.gameover.retry_button"
+                      onClick={handleRetry}
+                      className="w-full text-lg py-3 font-bold bg-red-500 hover:bg-red-600 text-white"
+                    >
+                      🔄 {t("retry")}
+                    </Button>
+                  ) : (
+                    <Button
+                      data-ocid="gameplay.gameover.retry_button"
+                      disabled
+                      className="w-full text-lg py-3 font-bold opacity-50 cursor-not-allowed"
+                    >
+                      🔄 {t("retry")}
+                    </Button>
+                  )}
+                  <Button
+                    data-ocid="gameplay.gameover.back_button"
+                    variant="outline"
+                    onClick={onBack}
+                    className="w-full"
+                  >
+                    <ArrowLeft className="mr-2 h-4 w-4" />
+                    {t("back_to_map")}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {/* === LEVEL COMPLETE MODAL === */}
         {isCompleted && (
           <button
             type="button"
@@ -980,9 +1541,7 @@ export default function GamePlay({
                           ? "fill-fruit-star text-fruit-star scale-110 animate-bounce"
                           : "text-gray-300"
                       }`}
-                      style={{
-                        animationDelay: `${(starNum - 1) * 0.2}s`,
-                      }}
+                      style={{ animationDelay: `${(starNum - 1) * 0.2}s` }}
                     />
                   ))}
                 </div>
@@ -1029,6 +1588,31 @@ export default function GamePlay({
                   {earnedStars === 2 && `👍 ${t("good_job")}`}
                   {earnedStars === 1 && `💪 ${t("can_do_better")}`}
                 </div>
+
+                {/* Share button */}
+                <Button
+                  data-ocid="gameplay.share_score.button"
+                  variant="outline"
+                  size="sm"
+                  className="flex items-center gap-2 mx-auto animate-in fade-in duration-700 delay-400"
+                  style={{
+                    borderColor: isBossLevel ? "#dc2626" : themeColors.primary,
+                    color: isBossLevel ? "#dc2626" : themeColors.primary,
+                  }}
+                  onClick={() => {
+                    const shareText = t("share_text")
+                      .replace("{level}", String(levelId))
+                      .replace("{world}", String(worldId))
+                      .replace("{stars}", String(earnedStars));
+                    navigator.clipboard
+                      .writeText(shareText)
+                      .then(() => toast.success(t("share_copied")))
+                      .catch(() => toast.info(shareText));
+                  }}
+                >
+                  <Share2 className="h-4 w-4" />
+                  {t("share_score")}
+                </Button>
 
                 <p className="text-xs text-gray-500 mt-4 animate-in fade-in duration-700 delay-500">
                   {t("auto_close")}

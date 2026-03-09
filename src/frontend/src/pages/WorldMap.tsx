@@ -1,8 +1,11 @@
+import DailyQuestsModal, {
+  hasUnfinishedQuests,
+} from "@/components/DailyQuests";
 import DailyRewardDialog from "@/components/DailyRewardDialog";
 import WorldCard from "@/components/WorldCard";
 import { Button } from "@/components/ui/button";
 import { useLanguage } from "@/hooks/useLanguage";
-import { ArrowLeft, Gift, Volume2, VolumeX } from "lucide-react";
+import { ArrowLeft, ClipboardList, Gift, Volume2, VolumeX } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Theme } from "../backend";
 import * as LocalStorage from "../lib/localStorageManager";
@@ -42,7 +45,7 @@ const WORLDS = [
   { id: 4, name: "forest", emoji: "🌲", theme: "forest", requiredStars: 216 },
   { id: 5, name: "volcano", emoji: "🌋", theme: "volcano", requiredStars: 288 },
   { id: 6, name: "space", emoji: "🚀", theme: "space", requiredStars: 360 },
-  { id: 7, name: "desert", emoji: "🏜️", theme: "desert", requiredStars: 432 },
+  { id: 7, name: "desert", emoji: "🏙️", theme: "desert", requiredStars: 432 },
   { id: 8, name: "arctic", emoji: "❄️", theme: "arctic", requiredStars: 504 },
   { id: 9, name: "jungle", emoji: "🌴", theme: "jungle", requiredStars: 576 },
   {
@@ -71,27 +74,35 @@ export default function WorldMap({
   const [playerData, setPlayerData] =
     useState<LocalStorage.LocalPlayerData | null>(null);
   const [showDailyReward, setShowDailyReward] = useState(false);
+  const [showDailyQuests, setShowDailyQuests] = useState(false);
+  const [hasQuests, setHasQuests] = useState(false);
+  // World transition state
+  const [transitionWorldId, setTransitionWorldId] = useState<number | null>(
+    null,
+  );
+  const [transitionPhase, setTransitionPhase] = useState<
+    "idle" | "expand" | "done"
+  >("idle");
+  const [pendingLevel, setPendingLevel] = useState<{
+    worldId: number;
+    levelId: number;
+  } | null>(null);
+
   const soundManager = getSoundManager();
   const [isSoundEnabled, setIsSoundEnabled] = useState<boolean>(
     soundManager.getSoundEnabled(),
   );
-
   const themeGradient = THEME_GRADIENTS[currentTheme];
 
   useEffect(() => {
     const data = LocalStorage.loadPlayerData();
     setPlayerData(data);
-
-    // Check if daily reward is available
-    const isAvailable = LocalStorage.isDailyRewardAvailable();
-    if (isAvailable) {
-      setShowDailyReward(true);
-    }
+    if (LocalStorage.isDailyRewardAvailable()) setShowDailyReward(true);
+    setHasQuests(hasUnfinishedQuests());
   }, []);
 
   const toggleSound = async () => {
     await soundManager.resumeContext();
-
     const newState = !isSoundEnabled;
     setIsSoundEnabled(newState);
     soundManager.setSoundEnabled(newState);
@@ -101,22 +112,36 @@ export default function WorldMap({
     try {
       const result = LocalStorage.claimDailyReward();
       console.log("[WorldMap] ✓ Daily reward claimed:", result);
-
-      // Reload player data to reflect new power-up counts
       const data = LocalStorage.loadPlayerData();
       setPlayerData(data);
-
       setShowDailyReward(false);
     } catch (error) {
       console.error("[WorldMap] Failed to claim daily reward:", error);
     }
   };
 
+  // Trigger world transition animation then navigate
+  const handleSelectLevel = (worldId: number, levelId: number) => {
+    setTransitionWorldId(worldId);
+    setPendingLevel({ worldId, levelId });
+    setTransitionPhase("expand");
+    setTimeout(() => {
+      setTransitionPhase("done");
+      setTimeout(() => {
+        setTransitionPhase("idle");
+        setTransitionWorldId(null);
+        if (pendingLevel || { worldId, levelId }) {
+          onSelectLevel(worldId, levelId);
+        }
+      }, 200);
+    }, 600);
+  };
+
   if (!playerData) {
     return (
       <div className="relative min-h-screen w-full flex items-center justify-center">
         <div
-          className={`fixed inset-0 bg-gradient-to-br ${themeGradient} pointer-events-none transition-all duration-1000`}
+          className={`fixed inset-0 bg-gradient-to-br ${themeGradient} pointer-events-none`}
         />
         <div className="relative z-10 text-white text-2xl font-bold">
           {t("loading")}
@@ -125,11 +150,42 @@ export default function WorldMap({
     );
   }
 
+  const totalPlayerStars = playerData.totalStars || 0;
+
+  const transitionWorld = transitionWorldId
+    ? WORLDS.find((w) => w.id === transitionWorldId)
+    : null;
+
   return (
     <div className="relative min-h-screen w-full p-4 md:p-8">
       <div
         className={`fixed inset-0 bg-gradient-to-br ${themeGradient} pointer-events-none transition-all duration-1000`}
       />
+
+      {/* World Transition Overlay */}
+      {transitionPhase !== "idle" && transitionWorld && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center pointer-events-none"
+          style={{
+            background:
+              transitionPhase === "expand"
+                ? "rgba(0,0,0,0.0)"
+                : "rgba(0,0,0,0.0)",
+          }}
+        >
+          <div
+            style={{
+              fontSize: "6rem",
+              lineHeight: 1,
+              transition: "all 0.6s cubic-bezier(0.34,1.56,0.64,1)",
+              transform: transitionPhase === "expand" ? "scale(8)" : "scale(0)",
+              opacity: transitionPhase === "expand" ? 0.9 : 0,
+            }}
+          >
+            {transitionWorld.emoji}
+          </div>
+        </div>
+      )}
 
       <button
         type="button"
@@ -145,8 +201,9 @@ export default function WorldMap({
       </button>
 
       <div className="relative z-10 max-w-7xl mx-auto">
-        <div className="flex items-center justify-between mb-8">
+        <div className="flex items-center justify-between mb-8 flex-wrap gap-3">
           <Button
+            data-ocid="worldmap.back.button"
             variant="ghost"
             size="lg"
             onClick={onBackToTitle}
@@ -156,15 +213,39 @@ export default function WorldMap({
             {t("main_menu")}
           </Button>
 
-          <Button
-            variant="default"
-            size="lg"
-            onClick={() => setShowDailyReward(true)}
-            className="bg-fruit-star hover:bg-fruit-star/90 text-white shadow-lg"
-          >
-            <Gift className="mr-2 h-5 w-5" />
-            {t("daily_reward")}
-          </Button>
+          <div className="flex items-center gap-3">
+            {/* Daily Quests Button */}
+            <div className="relative">
+              <Button
+                data-ocid="worldmap.daily_quests.button"
+                variant="outline"
+                size="lg"
+                onClick={() => setShowDailyQuests(true)}
+                className="bg-white/90 hover:bg-white text-gray-800 shadow-lg border-2 border-white/50"
+              >
+                <ClipboardList className="mr-2 h-5 w-5" />
+                Günlük Görevler
+              </Button>
+              {hasQuests && (
+                <div
+                  className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-red-500 border-2 border-white animate-pulse"
+                  aria-label="Bitmemiş görev var"
+                />
+              )}
+            </div>
+
+            {/* Daily Reward Button */}
+            <Button
+              data-ocid="worldmap.daily_reward.button"
+              variant="default"
+              size="lg"
+              onClick={() => setShowDailyReward(true)}
+              className="bg-fruit-star hover:bg-fruit-star/90 text-white shadow-lg"
+            >
+              <Gift className="mr-2 h-5 w-5" />
+              {t("daily_reward")}
+            </Button>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -189,7 +270,10 @@ export default function WorldMap({
                   levels: worldProgress.levels,
                 }}
                 isUnlocked={worldProgress.unlocked}
-                onSelectLevel={(levelId) => onSelectLevel(world.id, levelId)}
+                onSelectLevel={(levelId) =>
+                  handleSelectLevel(world.id, levelId)
+                }
+                totalPlayerStars={totalPlayerStars}
               />
             );
           })}
@@ -200,6 +284,25 @@ export default function WorldMap({
         open={showDailyReward}
         onClose={() => setShowDailyReward(false)}
         onClaim={handleClaimDailyReward}
+      />
+
+      <DailyQuestsModal
+        open={showDailyQuests}
+        onClose={() => {
+          setShowDailyQuests(false);
+          setHasQuests(hasUnfinishedQuests());
+        }}
+        onClaimReward={() => {
+          // Give a random power-up
+          const data = LocalStorage.loadPlayerData();
+          if (data) {
+            const types = ["bomb", "clock", "shuffle", "magnifier"] as const;
+            const type = types[Math.floor(Math.random() * types.length)];
+            data.powerUpCounts[type] = (data.powerUpCounts[type] || 0) + 3;
+            LocalStorage.savePlayerData(data);
+            setPlayerData({ ...data });
+          }
+        }}
       />
     </div>
   );

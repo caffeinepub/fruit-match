@@ -31,6 +31,7 @@ class WebAudioFallback {
   private bgGain: GainNode | null = null;
   private bgInterval: number | null = null;
   private currentWorldTheme = "garden";
+  private currentWorldId: number | null = null;
   private isMuted = false;
 
   private getContext(): AudioContext | null {
@@ -39,6 +40,10 @@ class WebAudioFallback {
         this.ctx = new (
           window.AudioContext || (window as any).webkitAudioContext
         )();
+      }
+      // Auto-resume suspended context (common in browsers requiring user gesture)
+      if (this.ctx && this.ctx.state === "suspended") {
+        this.ctx.resume(); // fire-and-forget
       }
       return this.ctx;
     } catch {
@@ -381,10 +386,15 @@ class WebAudioFallback {
 
   // World-themed background music using oscillators
   // Each world has a unique tempo/key/pattern
-  playBackground(worldTheme: string) {
+  playBackground(worldTheme: string, worldId?: number) {
     if (this.isMuted) return;
+    // Avoid restarting music if the same world is already playing
+    if (worldId !== undefined && worldId === this.currentWorldId) return;
     this.stopBackground();
     this.currentWorldTheme = worldTheme;
+    if (worldId !== undefined) {
+      this.currentWorldId = worldId;
+    }
 
     const ctx = this.getContext();
     if (!ctx) return;
@@ -536,6 +546,7 @@ class WebAudioFallback {
       clearInterval(this.bgInterval);
       this.bgInterval = null;
     }
+    this.currentWorldId = null;
   }
 
   isAvailable(): boolean {
@@ -726,7 +737,8 @@ class SoundManager {
         window.AndroidAudio!.changeWorldMusic(androidName);
       } else {
         await webAudioFallback.resume();
-        webAudioFallback.playBackground(worldName);
+        // Pass worldId to prevent restarting the same music on re-renders
+        webAudioFallback.playBackground(worldName, worldId);
       }
       this.wasPlayingBeforePause = true;
     } catch {

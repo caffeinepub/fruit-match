@@ -504,3 +504,105 @@ export function playerExists(): boolean {
   console.log("[LocalStorage] Player exists check:", exists);
   return exists;
 }
+
+// ==================== LIVES SYSTEM ====================
+
+const LIVES_KEY = "fruit_match_lives";
+const LIVES_REGEN_KEY = "fruit_match_lives_regen";
+const MAX_LIVES = 5;
+const REGEN_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+
+export function getLives(): number {
+  try {
+    const stored = localStorage.getItem(LIVES_KEY);
+    if (stored === null) return MAX_LIVES;
+    const lives = Number.parseInt(stored, 10);
+    return Number.isNaN(lives)
+      ? MAX_LIVES
+      : Math.min(Math.max(lives, 0), MAX_LIVES);
+  } catch {
+    return MAX_LIVES;
+  }
+}
+
+export function consumeLife(): boolean {
+  const lives = getLives();
+  if (lives <= 0) return false;
+  try {
+    localStorage.setItem(LIVES_KEY, String(lives - 1));
+    // If this is the first life consumed, start regen timer
+    if (!localStorage.getItem(LIVES_REGEN_KEY)) {
+      localStorage.setItem(LIVES_REGEN_KEY, String(Date.now()));
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function regenerateLives(): void {
+  try {
+    const lives = getLives();
+    if (lives >= MAX_LIVES) {
+      localStorage.removeItem(LIVES_REGEN_KEY);
+      return;
+    }
+    const regenStart = localStorage.getItem(LIVES_REGEN_KEY);
+    if (!regenStart) {
+      localStorage.setItem(LIVES_REGEN_KEY, String(Date.now()));
+      return;
+    }
+    const elapsed = Date.now() - Number.parseInt(regenStart, 10);
+    const livesToAdd = Math.floor(elapsed / REGEN_INTERVAL_MS);
+    if (livesToAdd > 0) {
+      const newLives = Math.min(lives + livesToAdd, MAX_LIVES);
+      localStorage.setItem(LIVES_KEY, String(newLives));
+      if (newLives >= MAX_LIVES) {
+        localStorage.removeItem(LIVES_REGEN_KEY);
+      } else {
+        // Advance the regen start by the time consumed
+        const consumed = livesToAdd * REGEN_INTERVAL_MS;
+        localStorage.setItem(
+          LIVES_REGEN_KEY,
+          String(Number.parseInt(regenStart, 10) + consumed),
+        );
+      }
+    }
+  } catch {
+    // silent
+  }
+}
+
+// ==================== ACHIEVEMENTS SYSTEM ====================
+
+const ACHIEVEMENTS_KEY = "fruit_match_achievements";
+
+export function getAchievements(): string[] {
+  try {
+    const stored = localStorage.getItem(ACHIEVEMENTS_KEY);
+    if (!stored) return [];
+    return JSON.parse(stored) as string[];
+  } catch {
+    return [];
+  }
+}
+
+export function hasAchievement(id: string): boolean {
+  return getAchievements().includes(id);
+}
+
+/**
+ * Unlock an achievement. Returns true if it was newly unlocked (not previously earned).
+ */
+export function unlockAchievement(id: string): boolean {
+  const achievements = getAchievements();
+  if (achievements.includes(id)) return false;
+  try {
+    achievements.push(id);
+    localStorage.setItem(ACHIEVEMENTS_KEY, JSON.stringify(achievements));
+    console.log(`[LocalStorage] ✓ Achievement unlocked: ${id}`);
+    return true;
+  } catch {
+    return false;
+  }
+}

@@ -34,6 +34,7 @@ import {
 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Theme } from "../backend";
+import { AchievementGallery } from "../components/AchievementSystem";
 import * as LocalStorage from "../lib/localStorageManager";
 import { getSoundManager } from "../lib/soundManager";
 
@@ -420,6 +421,15 @@ export default function PlayerProfile({
                 </span>
               </div>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card className="bg-white/95 backdrop-blur-md shadow-xl mb-8">
+          <CardHeader>
+            <CardTitle className="text-2xl">ud83cudfc5 Rozetler</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <AchievementGallery />
           </CardContent>
         </Card>
 

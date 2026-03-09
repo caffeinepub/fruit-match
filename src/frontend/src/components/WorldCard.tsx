@@ -25,6 +25,7 @@ interface WorldCardProps {
   progress: WorldProgress;
   isUnlocked: boolean;
   onSelectLevel: (levelId: number) => void;
+  totalPlayerStars?: number;
 }
 
 const WORLD_BACKGROUNDS: Record<string, string> = {
@@ -128,21 +129,25 @@ export default function WorldCard({
   progress,
   isUnlocked,
   onSelectLevel,
+  totalPlayerStars = 0,
 }: WorldCardProps) {
   const { t } = useLanguage();
   const backgroundImage = WORLD_BACKGROUNDS[world.theme];
   const worldIcon = WORLD_ICONS[world.theme];
   const themeColors = WORLD_THEME_COLORS[world.theme];
 
+  // For locked worlds: show progress toward required stars
+  const lockProgressPercent =
+    world.requiredStars > 0
+      ? Math.min(100, (totalPlayerStars / world.requiredStars) * 100)
+      : 100;
+  const starsNeeded = Math.max(0, world.requiredStars - totalPlayerStars);
+
   return (
     <Card
       className={`
         relative overflow-hidden transition-all duration-500 group
-        ${
-          isUnlocked
-            ? "hover:shadow-2xl hover:scale-105 cursor-pointer"
-            : "opacity-75"
-        }
+        ${isUnlocked ? "hover:shadow-2xl hover:scale-105 cursor-pointer" : "opacity-90"}
       `}
       style={{
         borderWidth: "3px",
@@ -174,18 +179,17 @@ export default function WorldCard({
       {isUnlocked && (
         <div
           className="absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-500"
-          style={{
-            boxShadow: `inset 0 0 30px ${themeColors.primary}`,
-          }}
+          style={{ boxShadow: `inset 0 0 30px ${themeColors.primary}` }}
         />
       )}
 
       <CardHeader className="relative z-10">
         <CardTitle className="flex items-center justify-between">
           <div className="flex items-center gap-4">
-            {/* World Icon */}
             <div
-              className="relative w-16 h-16 rounded-full flex items-center justify-center transition-all duration-500 group-hover:scale-110 group-hover:rotate-12"
+              className={`relative w-16 h-16 rounded-full flex items-center justify-center transition-all duration-500 group-hover:scale-110 group-hover:rotate-12 ${
+                !isUnlocked ? "animate-pulse" : ""
+              }`}
               style={{
                 backgroundColor: isUnlocked ? themeColors.light : "#6b7280",
                 boxShadow: isUnlocked
@@ -196,10 +200,11 @@ export default function WorldCard({
               <img
                 src={worldIcon}
                 alt={world.name}
-                className="w-10 h-10 object-contain drop-shadow-lg"
+                className={`w-10 h-10 object-contain drop-shadow-lg ${
+                  !isUnlocked ? "grayscale opacity-50" : ""
+                }`}
               />
             </div>
-
             <div>
               <div className="text-2xl font-bold text-white drop-shadow-lg">
                 {t(world.name as any)}
@@ -207,7 +212,7 @@ export default function WorldCard({
             </div>
           </div>
           {!isUnlocked && (
-            <div className="p-3 rounded-full bg-gray-700/80 backdrop-blur-sm">
+            <div className="p-3 rounded-full bg-gray-700/80 backdrop-blur-sm animate-pulse">
               <Lock className="h-6 w-6 text-white" />
             </div>
           )}
@@ -240,7 +245,7 @@ export default function WorldCard({
               />
             </div>
 
-            {/* Level Grid with Star Display - 6 columns for 30 levels */}
+            {/* Level Grid */}
             <div className="grid grid-cols-6 gap-2">
               {Array.from({ length: 30 }, (_, i) => i + 1).map((levelId) => {
                 const levelData = progress.levels[levelId - 1];
@@ -273,8 +278,6 @@ export default function WorldCard({
                     >
                       {levelId}
                     </Button>
-
-                    {/* Star Display Below Level */}
                     <div className="flex items-center gap-0.5 h-3">
                       {[1, 2, 3].map((starNum) => (
                         <Star
@@ -293,11 +296,45 @@ export default function WorldCard({
             </div>
           </>
         ) : (
-          <div className="text-center py-12 bg-black/40 backdrop-blur-sm rounded-lg">
-            <Lock className="h-16 w-16 mx-auto mb-4 text-white drop-shadow-lg" />
-            <p className="text-white font-bold text-lg drop-shadow-md">
-              {world.requiredStars} {t("stars")} {t("locked").toLowerCase()}
+          /* === IMPROVED LOCKED WORLD DISPLAY === */
+          <div className="text-center py-8 bg-black/40 backdrop-blur-sm rounded-lg px-4">
+            <Lock
+              className="h-14 w-14 mx-auto mb-3 text-white drop-shadow-lg animate-pulse"
+              style={{ animationDuration: "2s" }}
+            />
+            <p className="text-white font-bold text-base drop-shadow-md mb-1">
+              {world.requiredStars} ⭐ gerekli
             </p>
+            {starsNeeded > 0 && (
+              <p className="text-yellow-300 text-sm font-semibold mb-4">
+                {starsNeeded} yıldız daha lazım
+              </p>
+            )}
+
+            {/* Star progress bar */}
+            <div className="mb-2">
+              <div className="flex items-center justify-between text-xs text-white/80 mb-1">
+                <span>{totalPlayerStars} ⭐</span>
+                <span>{world.requiredStars} ⭐</span>
+              </div>
+              <div className="h-3 bg-white/20 rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all duration-700"
+                  style={{
+                    width: `${lockProgressPercent}%`,
+                    background:
+                      lockProgressPercent < 33
+                        ? "linear-gradient(90deg, #ef4444, #f97316)"
+                        : lockProgressPercent < 66
+                          ? "linear-gradient(90deg, #f97316, #eab308)"
+                          : "linear-gradient(90deg, #eab308, #22c55e)",
+                  }}
+                />
+              </div>
+              <p className="text-white/60 text-xs mt-1">
+                {Math.round(lockProgressPercent)}% tamamlandı
+              </p>
+            </div>
           </div>
         )}
       </CardContent>
