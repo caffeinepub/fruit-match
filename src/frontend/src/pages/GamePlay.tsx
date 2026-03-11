@@ -3,7 +3,12 @@ import PowerUpPanel from "@/components/PowerUpPanel";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useLanguage } from "@/hooks/useLanguage";
-import { type Level, type Tile, generateLevel } from "@/lib/gameLogic";
+import {
+  type Level,
+  type Tile,
+  calculateStarRating,
+  generateLevel,
+} from "@/lib/gameLogic";
 import {
   AlertCircle,
   ArrowLeft,
@@ -30,6 +35,7 @@ import {
 } from "../components/AchievementSystem";
 import { updateQuestProgress } from "../components/DailyQuests";
 import * as LocalStorage from "../lib/localStorageManager";
+import { getNextLifeCountdownMs } from "../lib/localStorageManager";
 import { getSoundManager } from "../lib/soundManager";
 
 // Boss level visual effects
@@ -226,6 +232,10 @@ export default function GamePlay({
   const [showObjectiveOverlay, setShowObjectiveOverlay] = useState(true);
   const [showStarInfo, setShowStarInfo] = useState(false);
   const [usedPowerUpThisLevel, setUsedPowerUpThisLevel] = useState(false);
+  const [lifeCountdown, setLifeCountdown] = useState(0);
+  const [collectedByType, setCollectedByType] = useState<
+    Record<string, number>
+  >({});
   // -----------------
 
   const timerRef = useRef<number | null>(null);
@@ -238,6 +248,15 @@ export default function GamePlay({
   const themeColors =
     WORLD_THEME_COLORS[worldId as keyof typeof WORLD_THEME_COLORS] ||
     WORLD_THEME_COLORS[1];
+
+  // Collection objective derived values
+  const collectTarget = levelData.collectTarget;
+  const collectProgress = collectTarget
+    ? (collectedByType[collectTarget.fruitType] ?? 0)
+    : 0;
+  const collectDone = collectTarget
+    ? collectProgress >= collectTarget.count
+    : false;
   const worldIcon =
     WORLD_ICONS[worldId as keyof typeof WORLD_ICONS] || WORLD_ICONS[1];
   const soundManager = getSoundManager();
@@ -282,6 +301,15 @@ export default function GamePlay({
       return () => clearTimeout(timer);
     }
   }, [showObjectiveOverlay]);
+
+  // Life countdown timer for game over screen
+  useEffect(() => {
+    if (!isGameOver || lives > 0) return;
+    const update = () => setLifeCountdown(getNextLifeCountdownMs());
+    update();
+    const id = window.setInterval(update, 1000);
+    return () => clearInterval(id);
+  }, [isGameOver, lives]);
 
   const toggleSound = async () => {
     await soundManager.resumeContext();
@@ -513,6 +541,14 @@ export default function GamePlay({
         return;
       }
 
+      if (tile.frozen) {
+        toast.error(
+          t("frozen_tile_locked") ||
+            "❄️ Donmuş karo! Yakındaki karoları eşleştir.",
+        );
+        return;
+      }
+
       await soundManager.playSound(SoundContext.tileClick);
 
       if (selectedTile === null) {
@@ -568,6 +604,25 @@ export default function GamePlay({
             }),
           );
 
+          // Unfreeze frozen tiles adjacent to just-matched tiles
+          setTiles((prev) => {
+            const hasFrozen = prev.some((t) => t.frozen && !t.matched);
+            if (!hasFrozen) return prev;
+            const matchedIndices = prev
+              .map((t, i) =>
+                t.id === tileId || t.id === selectedTile ? i : -1,
+              )
+              .filter((i) => i >= 0);
+            const gridCols = 4;
+            return prev.map((t, i) => {
+              if (!t.frozen || t.matched) return t;
+              const isNear = matchedIndices.some(
+                (mi) => Math.abs(mi - i) <= gridCols,
+              );
+              return isNear ? { ...t, frozen: false } : t;
+            });
+          });
+
           if (bothChained) {
             setCurrentChainGroup((prev) => prev + 1);
           }
@@ -588,6 +643,33 @@ export default function GamePlay({
           setComboCount(newCombo);
           updateQuestProgress("combo");
           triggerComboDisplay(newCombo);
+
+          // Spawn bomb tile on 4+ combo
+          if (newCombo >= 4 && newCombo % 4 === 0) {
+            setTiles((prev) => {
+              const candidates = prev.filter(
+                (t) =>
+                  !t.matched &&
+                  !t.special &&
+                  t.id !== selectedTile &&
+                  t.id !== tileId,
+              );
+              if (candidates.length < 2) return prev;
+              const target =
+                candidates[Math.floor(Math.random() * candidates.length)];
+              return prev.map((t) =>
+                t.id === target.id ? { ...t, special: "bomb" as const } : t,
+              );
+            });
+            toast.success(t("combo_bomb_spawned") || "💣 Bomba karo oluştu!");
+          }
+
+          // Track collected fruits for collection objective
+          setCollectedByType((prev) => ({
+            ...prev,
+            [tile.fruitType]: (prev[tile.fruitType] ?? 0) + 1,
+            [firstTile.fruitType]: (prev[firstTile.fruitType] ?? 0) + 1,
+          }));
 
           // Handle special tile effects
           for (const special of specials) {
@@ -641,7 +723,18 @@ export default function GamePlay({
           const remainingTiles = tiles.filter(
             (t) => !t.matched && t.id !== selectedTile && t.id !== tileId,
           );
-          if (remainingTiles.length === 0) {
+          // Fix stale closure: compute new collected count inline
+          let newCollectDone = false;
+          if (collectTarget) {
+            const addedCount =
+              (tile.fruitType === collectTarget.fruitType ? 1 : 0) +
+              (firstTile.fruitType === collectTarget.fruitType ? 1 : 0);
+            const newCount =
+              (collectedByType[collectTarget.fruitType] ?? 0) + addedCount;
+            newCollectDone = newCount >= collectTarget.count;
+          }
+          const shouldComplete = remainingTiles.length === 0 || newCollectDone;
+          if (shouldComplete) {
             handleLevelCompleteRef.current();
           }
         } else {
@@ -666,6 +759,8 @@ export default function GamePlay({
       comboCount,
       isMoveBased,
       moveLimit,
+      collectTarget,
+      collectDone,
     ],
   );
 
@@ -685,16 +780,24 @@ export default function GamePlay({
     let stars = 1;
     const breakdown: string[] = [];
 
-    const timePercentage = timeTaken / timeLimit;
-
-    if (timePercentage < 0.4) {
-      stars = 3;
+    // Use proper star rating formula (time remaining + move efficiency)
+    const timeRemaining = Math.max(0, timeLeft);
+    const movesUsedFinal = movesUsed ?? 0;
+    const optimalMovesVal =
+      (levelData as any)?.optimalMoves ?? Math.floor(tiles.length / 2) ?? 10;
+    stars = calculateStarRating(
+      worldId,
+      levelId,
+      timeRemaining,
+      timeLimit,
+      movesUsedFinal,
+      optimalMovesVal,
+    );
+    if (stars === 3) {
       breakdown.push(`⭐⭐⭐ ${t("very_fast")}`);
-    } else if (timePercentage < 0.7) {
-      stars = 2;
+    } else if (stars === 2) {
       breakdown.push(`⭐⭐ ${t("normal_time")}`);
     } else {
-      stars = 1;
       breakdown.push(`⭐ ${t("slow_completion")}`);
     }
 
@@ -894,6 +997,7 @@ export default function GamePlay({
     setComboCount(0);
     setShowObjectiveOverlay(true);
     setUsedPowerUpThisLevel(false);
+    setCollectedByType({});
     bossAudioPlayedRef.current = false;
 
     const counts = LocalStorage.getPowerUpCounts();
@@ -905,6 +1009,10 @@ export default function GamePlay({
 
   // --- Objective text helper ---
   const getObjectiveText = () => {
+    if (collectTarget)
+      return t("objective_collect")
+        .replace("{fruit}", collectTarget.fruitType)
+        .replace("{n}", String(collectTarget.count));
     if (isBossLevel) return t("objective_boss");
     if (isMoveBased)
       return t("objective_moves").replace("{n}", String(moveLimit));
@@ -1004,7 +1112,17 @@ export default function GamePlay({
               data-ocid="gameplay.pause.toggle"
               variant="ghost"
               size="sm"
-              onClick={() => setIsPaused((p) => !p)}
+              onClick={() => {
+                setIsPaused((p) => {
+                  const newPaused = !p;
+                  if (newPaused) {
+                    soundManager.pauseBackgroundMusic();
+                  } else {
+                    soundManager.resumeBackgroundMusic();
+                  }
+                  return newPaused;
+                });
+              }}
               className="bg-white/95 hover:bg-white backdrop-blur-md shadow-lg border-2 border-white/50 transition-all hover:scale-105 px-3 py-2"
               aria-label={isPaused ? t("resume") : t("pause")}
             >
@@ -1224,6 +1342,29 @@ export default function GamePlay({
               }}
             />
           </div>
+          {/* Collection objective progress */}
+          {collectTarget && (
+            <div className="mt-2 flex items-center gap-2">
+              <span className="text-xs font-bold text-white drop-shadow">
+                {collectTarget.fruitType} {collectProgress}/
+                {collectTarget.count}
+              </span>
+              <div className="flex-1 h-2 bg-white/30 rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all duration-300"
+                  style={{
+                    width: `${Math.min(100, (collectProgress / collectTarget.count) * 100)}%`,
+                    background: themeColors.primary,
+                  }}
+                />
+              </div>
+              {collectDone && (
+                <span className="text-xs font-bold text-yellow-300 animate-bounce">
+                  ✓
+                </span>
+              )}
+            </div>
+          )}
           {/* Star conditions tooltip */}
           {showStarInfo && (
             <div
@@ -1463,7 +1604,18 @@ export default function GamePlay({
                     ))}
                   </div>
                   {lives === 0 && (
-                    <p className="text-red-500 text-xs">{t("no_lives")}</p>
+                    <div>
+                      <p className="text-red-500 text-xs">{t("no_lives")}</p>
+                      {lifeCountdown > 0 && (
+                        <p className="text-orange-500 text-sm font-semibold">
+                          ⏱️ {t("next_life_in")}:{" "}
+                          {Math.floor(lifeCountdown / 60000)}:
+                          {String(
+                            Math.floor((lifeCountdown % 60000) / 1000),
+                          ).padStart(2, "0")}
+                        </p>
+                      )}
+                    </div>
                   )}
                 </div>
 

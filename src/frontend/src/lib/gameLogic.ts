@@ -29,6 +29,7 @@ export interface Level {
   isBoss?: boolean;
   bossObjective?: BossObjective;
   moveLimit?: number; // If set, this is a move-based level
+  collectTarget?: { fruitType: string; count: number }; // Collect X of specific fruit to win
 }
 
 const FRUIT_TYPES = [
@@ -689,6 +690,29 @@ export function generateLevel(worldIdIn: number, levelIdIn: number): Level {
   // Add boss objective for boss levels
   if (isBoss) {
     level.bossObjective = generateBossObjective(worldId);
+  }
+
+  // Add collection objective for milestone levels (5, 10, 15, 20, 25)
+  if (!isBoss && levelId % 5 === 0) {
+    const FRUIT_TYPES_LOCAL = [
+      "apple",
+      "orange",
+      "banana",
+      "grape",
+      "strawberry",
+      "cherry",
+      "watermelon",
+      "pineapple",
+    ];
+    const targetFruit =
+      FRUIT_TYPES_LOCAL[(worldId + levelId) % FRUIT_TYPES_LOCAL.length];
+    const targetCount = tiles.filter((t) => t.fruitType === targetFruit).length;
+    if (targetCount >= 2) {
+      level.collectTarget = {
+        fruitType: targetFruit,
+        count: Math.ceil(targetCount / 2),
+      };
+    }
   }
 
   return level;

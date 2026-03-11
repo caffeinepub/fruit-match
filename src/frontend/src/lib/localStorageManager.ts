@@ -606,3 +606,20 @@ export function unlockAchievement(id: string): boolean {
     return false;
   }
 }
+
+/**
+ * Returns milliseconds until next life regenerates (0 if lives are full or timer not started).
+ */
+export function getNextLifeCountdownMs(): number {
+  try {
+    const lives = getLives();
+    if (lives >= 5) return 0;
+    const regenStart = localStorage.getItem("fruit_match_lives_regen");
+    if (!regenStart) return 0;
+    const elapsed = Date.now() - Number.parseInt(regenStart, 10);
+    const remaining = 30 * 60 * 1000 - (elapsed % (30 * 60 * 1000));
+    return Math.max(0, remaining);
+  } catch {
+    return 0;
+  }
+}

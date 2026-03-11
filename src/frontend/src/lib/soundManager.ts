@@ -597,6 +597,36 @@ class SoundManager {
     };
   }
 
+  pauseBackgroundMusic() {
+    if (this.isPaused) return;
+    this.isPaused = true;
+    this.wasPlayingBeforePause =
+      this.isSoundEnabled && this.currentTheme !== null;
+    if (this.isAndroid()) {
+      window.AndroidAudio?.pauseAllAudio?.();
+    } else {
+      webAudioFallback.stopBackground();
+    }
+  }
+
+  resumeBackgroundMusic() {
+    if (!this.isPaused) return;
+    this.isPaused = false;
+    if (
+      this.wasPlayingBeforePause &&
+      this.isSoundEnabled &&
+      this.currentTheme
+    ) {
+      if (this.isAndroid()) {
+        window.AndroidAudio?.resumeAudio?.();
+      } else {
+        webAudioFallback.playBackground(
+          this.mapThemeToWorldName(this.currentTheme),
+        );
+      }
+    }
+  }
+
   private handleAndroidPause() {
     this.isPaused = true;
     this.wasPlayingBeforePause =
